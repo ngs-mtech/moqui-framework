@@ -1855,7 +1855,7 @@ class ScreenForm {
             int percentColsCount = numCols - fixedColsCount
 
             // scale column percents to 100, fill in missing
-            BigDecimal percentTotal = 0
+            BigDecimal percentTotal = new BigDecimal(0);
             for (int i = 0; i < numCols; i++) {
                 BigDecimal colPercent = (BigDecimal) percentWidths.get(i)
                 if (colPercent == null) {

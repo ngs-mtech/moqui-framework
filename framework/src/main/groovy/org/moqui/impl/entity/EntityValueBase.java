@@ -99,8 +99,11 @@ public abstract class EntityValueBase implements EntityValue {
 
     protected EntityFacadeImpl getEntityFacadeImpl() {
         // handle null after deserialize; this requires a static reference in Moqui.java or we'll get an error
-        if (efiTransient == null)
-            efiTransient = ((ExecutionContextFactoryImpl) Moqui.getExecutionContextFactory()).entityFacade;
+        if (efiTransient == null) {
+            ExecutionContextFactoryImpl ecfi = (ExecutionContextFactoryImpl) Moqui.getExecutionContextFactory();
+            if (ecfi == null) throw new EntityException("No ExecutionContextFactory found, cannot get EntityFacade for new EVB for entity " + entityName);
+            efiTransient = ecfi.entityFacade;
+        }
         return efiTransient;
     }
     private TransactionCache getTxCache(ExecutionContextFactoryImpl ecfi) {
@@ -118,9 +121,10 @@ public abstract class EntityValueBase implements EntityValue {
 
     protected void setDbValueMap(Map<String, Object> map) {
         dbValueMap = new HashMap<>();
-        FieldInfo[] nonPkFields = getEntityDefinition().entityInfo.nonPkFieldInfoArray;
-        for (int i = 0; i < nonPkFields.length; i++) {
-            FieldInfo fi = nonPkFields[i];
+        // copy all fields, including pk to fix false positives in the old approach of only non-pk fields
+        FieldInfo[] allFields = getEntityDefinition().entityInfo.allFieldInfoArray;
+        for (int i = 0; i < allFields.length; i++) {
+            FieldInfo fi = allFields[i];
             if (!map.containsKey(fi.name)) continue;
             Object curValue = map.get(fi.name);
             dbValueMap.put(fi.name, curValue);

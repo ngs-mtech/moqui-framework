@@ -135,12 +135,12 @@ class ScreenRenderImpl implements ScreenRender {
         this.request = request
         this.response = response
         // NOTE: don't get the writer at this point, we don't yet know if we're writing text or binary
-        if (webappName == null || webappName.length() == 0) webappName(request.servletContext.getInitParameter("moqui-name"))
+        if (webappName == null || webappName.length() == 0) webappName = request.servletContext.getInitParameter("moqui-name")
         if (webappName != null && webappName.length() > 0 && (rootScreenLocation == null || rootScreenLocation.length() == 0))
             rootScreenFromHost(request.getServerName())
         if (originalScreenPathNameList == null || originalScreenPathNameList.size() == 0) {
-            String pathInfo = request.getPathInfo()
-            if (pathInfo != null) screenPath(Arrays.asList(pathInfo.split("/")))
+            ArrayList<String> pathList = ec.web.getPathInfoList()
+            screenPath(pathList)
         }
         if (servletContextPath == null || servletContextPath.isEmpty())
             servletContextPath = request.getServletContext()?.getContextPath()
@@ -670,7 +670,8 @@ class ScreenRenderImpl implements ScreenRender {
         ArrayList<ScreenDefinition> screenPathDefList = screenUrlInfo.screenPathDefList
         int screenPathDefListSize = screenPathDefList.size()
 
-        if (screenUrlInfo.targetScreen.isServerStatic(renderMode)) {
+        boolean isServerStatic = screenUrlInfo.targetScreen.isServerStatic(renderMode)
+        if (isServerStatic) {
             if (response != null) response.addHeader("Cache-Control", "max-age=3600, must-revalidate, private")
             // TODO: consider server caching of rendered screen, this is the place to do it
         }
@@ -693,7 +694,16 @@ class ScreenRenderImpl implements ScreenRender {
                 response.setContentType(this.outputContentType)
                 response.setCharacterEncoding(this.characterEncoding)
                 // if requires a render, don't cache and make it private
-                response.addHeader("Cache-Control", "no-cache, no-store, must-revalidate, private")
+                if (!isServerStatic) response.addHeader("Cache-Control", "no-cache, no-store, must-revalidate, private")
+                // if the request is secure add HSTS Strict-Transport-Security header with one leap year age (in seconds)
+                if (request.isSecure()) response.addHeader("Strict-Transport-Security", "max-age=31536000")
+
+                // add Content-Security-Policy by default to not allow use in iframe or allow form actions on different host
+                // see https://content-security-policy.com/
+                // TODO make this configurable for different screen paths? maybe a screen.web-settings attribute to exclude or add to?
+                // TODO consider "child-src 'self';", leaving out as default because 3rd party hosts needed for payment processing hosted forms, etc; would need to be configurable per instance or something
+                response.addHeader("Content-Security-Policy", "frame-ancestors 'none'; form-action 'self';")
+                response.addHeader("X-Frame-Options", "deny")
 
                 String filename = ec.context.saveFilename as String
                 if (filename) {
@@ -1763,7 +1773,7 @@ class ScreenRenderImpl implements ScreenRender {
         for (int i = 0; i < (fullPathSize - 1); i++) {
             String pathItem = (String) fullPathList.get(i)
             String nextItem = (String) fullPathList.get(i+1)
-            currentPath.append('/').append(pathItem)
+            currentPath.append('/').append(StringUtilities.urlEncodeIfNeeded(pathItem))
 
             SubscreensItem curSsi = curScreen.getSubscreensItem(pathItem)
             // already checked for exists above, path may have extra path elements beyond the screen so allow it
@@ -1775,7 +1785,7 @@ class ScreenRenderImpl implements ScreenRender {
             int menuItemsSize = menuItems.size()
             for (int j = 0; j < menuItemsSize; j++) {
                 SubscreensItem subscreensItem = (SubscreensItem) menuItems.get(j)
-                String screenPath = new StringBuilder(currentPath).append('/').append(subscreensItem.name).toString()
+                String screenPath = new StringBuilder(currentPath).append('/').append(StringUtilities.urlEncodeIfNeeded(subscreensItem.name)).toString()
                 UrlInstance screenUrlInstance = buildUrl(screenPath)
                 ScreenUrlInfo sui = screenUrlInstance.sui
                 if (!screenUrlInstance.isPermitted()) continue
@@ -1809,14 +1819,19 @@ class ScreenRenderImpl implements ScreenRender {
                 // not needed: screenStatic:sui.targetScreen.isServerStatic(renderMode)
             }
 
-            menuDataList.add([name:pathItem, title:curScreen.getDefaultMenuName(), subscreens:subscreensList,
-                              path:currentPath.toString(), hasTabMenu:curScreen.hasTabMenu(), renderModes:curScreen.renderModes])
+            String curScreenPath = currentPath.toString()
+            UrlInstance curUrlInstance = buildUrl(curScreenPath)
+            String curPathWithParams = curScreenPath
+            String curParmString = curUrlInstance.getParameterString()
+            if (!curParmString.isEmpty()) curPathWithParams = curPathWithParams + '?' + curParmString
+            menuDataList.add([name:pathItem, title:curScreen.getDefaultMenuName(), subscreens:subscreensList, path:curScreenPath,
+                    pathWithParams:curPathWithParams, hasTabMenu:curScreen.hasTabMenu(), renderModes:curScreen.renderModes])
             // not needed: screenStatic:curScreen.isServerStatic(renderMode)
         }
 
         String lastPathItem = (String) fullPathList.get(fullPathSize - 1)
         fullUrlInstance.addParameters(ec.web.getRequestParameters())
-        currentPath.append('/').append(lastPathItem)
+        currentPath.append('/').append(StringUtilities.urlEncodeIfNeeded(lastPathItem))
         String lastPath = currentPath.toString()
         String paramString = fullUrlInstance.getParameterString()
         if (paramString.length() > 0) currentPath.append('?').append(paramString)
@@ -1829,6 +1844,10 @@ class ScreenRenderImpl implements ScreenRender {
         if (lastTitle.contains('${')) lastTitle = ec.resourceFacade.expand(lastTitle, "")
         List<Map<String, Object>> screenDocList = fullUrlInfo.targetScreen.getScreenDocumentInfoList()
 
+        if (extraPathList != null) {
+            int extraPathListSize = extraPathList.size()
+            for (int i = 0; i < extraPathListSize; i++) extraPathList.set(i, StringUtilities.urlEncodeIfNeeded(extraPathList.get(i)))
+        }
         Map lastMap = [name:lastPathItem, title:lastTitle, path:lastPath, pathWithParams:currentPath.toString(), image:lastImage,
                 extraPathList:extraPathList, screenDocList:screenDocList, renderModes:fullUrlInfo.targetScreen.renderModes]
         if ("icon".equals(lastImageType)) lastMap.imageType = "icon"
